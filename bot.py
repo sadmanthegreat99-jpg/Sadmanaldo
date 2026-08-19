@@ -5,7 +5,7 @@ from telegram import Bot
 TELEGRAM_BOT_TOKEN = "8809488487:AAE_8aTbFgBUnym-KDsMVvWnSJ7Dn0lhO88"
 TELEGRAM_CHAT_ID = "-1003999914043"
 LAMIX_API_URL = "http://51.77.216.195/crapi/lamix/viewstats"
-LAMIX_TOKEN = "iZKYSleJgIdkalaLV19YdEhVj1R8YWVfQ2pWXEeRgFU"
+LAMIX_TOKEN = "iZKYSleJgIdkalaLV19YdEhVj1R8YWVfQ2pWXEeRgFU="
 
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 seen_sms_ids = set()
@@ -36,13 +36,11 @@ async def main():
         try:
             sms_list = get_latest_sms()
             for sms in sms_list:
-                # Correct key names matching Lamix API Response
                 number = sms.get("num", "Unknown")
                 message_text = sms.get("message", "")
                 date_str = sms.get("dt", "N/A")
                 service_client = sms.get("cli", "N/A")
 
-                # Unique key for duplicate control
                 sms_key = f"{number}_{message_text}_{date_str}"
 
                 if sms_key not in seen_sms_ids:
