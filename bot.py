@@ -1,5 +1,4 @@
 import asyncio
-import time
 import requests
 from telegram import Bot
 
@@ -13,41 +12,53 @@ seen_sms_ids = set()
 
 
 def get_latest_sms():
-    today = time.strftime("%Y-%m-%d")
     params = {
         "token": LAMIX_TOKEN,
-        "dt1": f"{today} 00:00:00",
-        "dt2": f"{today} 23:59:59",
         "records": "5",
     }
     try:
         response = requests.get(LAMIX_API_URL, params=params, timeout=10)
         data = response.json()
-        if data.get("status") != "error" and "data" in data:
+
+        if data.get("status") == "success" and isinstance(data.get("data"), list):
             return data["data"]
+        elif isinstance(data, list):
+            return data
     except Exception as e:
-        print(f"API Error: {e}")
+        print(f"API Fetch Error: {e}")
+
     return []
 
 
 async def main():
     print("Bot is LIVE & Checking for new SMS...")
     while True:
-        sms_list = get_latest_sms()
-        for sms in sms_list:
-            sms_key = f"{sms.get('number')}_{sms.get('msg')}"
-            if sms_key not in seen_sms_ids:
-                seen_sms_ids.add(sms_key)
+        try:
+            sms_list = get_latest_sms()
+            for sms in sms_list:
+                number = sms.get("number", "Unknown")
+                msg = sms.get("msg", "")
+                date_str = sms.get("date", "N/A")
 
-                message = (
-                    f"🔔 **New SMS Received**\n\n"
-                    f"📱 **Number:** `{sms.get('number')}`\n"
-                    f"💬 **SMS:** {sms.get('msg')}\n"
-                    f"⏰ **Time:** {sms.get('date')}"
-                )
-                await bot.send_message(
-                    chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode="Markdown"
-                )
+                sms_key = f"{number}_{msg}_{date_str}"
+
+                if sms_key not in seen_sms_ids:
+                    seen_sms_ids.add(sms_key)
+
+                    message = (
+                        f"🔔 *New SMS Received*\n\n"
+                        f"📱 *Number:* `{number}`\n"
+                        f"💬 *SMS:* {msg}\n"
+                        f"⏰ *Time:* {date_str}"
+                    )
+
+                    await bot.send_message(
+                        chat_id=TELEGRAM_CHAT_ID,
+                        text=message,
+                        parse_mode="Markdown",
+                    )
+        except Exception as e:
+            print(f"Loop Error: {e}")
 
         await asyncio.sleep(5)
 
