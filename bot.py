@@ -14,7 +14,7 @@ seen_sms_ids = set()
 def get_latest_sms():
     params = {
         "token": LAMIX_TOKEN,
-        "records": "5",
+        "records": "10",
     }
     try:
         response = requests.get(LAMIX_API_URL, params=params, timeout=10)
@@ -36,25 +36,29 @@ async def main():
         try:
             sms_list = get_latest_sms()
             for sms in sms_list:
-                number = sms.get("number", "Unknown")
-                msg = sms.get("msg", "")
-                date_str = sms.get("date", "N/A")
+                # Correct key names matching Lamix API Response
+                number = sms.get("num", "Unknown")
+                message_text = sms.get("message", "")
+                date_str = sms.get("dt", "N/A")
+                service_client = sms.get("cli", "N/A")
 
-                sms_key = f"{number}_{msg}_{date_str}"
+                # Unique key for duplicate control
+                sms_key = f"{number}_{message_text}_{date_str}"
 
                 if sms_key not in seen_sms_ids:
                     seen_sms_ids.add(sms_key)
 
-                    message = (
+                    telegram_msg = (
                         f"🔔 *New SMS Received*\n\n"
                         f"📱 *Number:* `{number}`\n"
-                        f"💬 *SMS:* {msg}\n"
+                        f"🏢 *Service:* {service_client}\n"
+                        f"💬 *SMS:* {message_text}\n"
                         f"⏰ *Time:* {date_str}"
                     )
 
                     await bot.send_message(
                         chat_id=TELEGRAM_CHAT_ID,
-                        text=message,
+                        text=telegram_msg,
                         parse_mode="Markdown",
                     )
         except Exception as e:
