@@ -2,86 +2,73 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
 import requests
 from telegram import Bot
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 # ---------------------------------------------------------------------------
-# কনফিগারেশন — Railway তে Variables ট্যাব থেকে সেট করা যাবে
+# Environment Variables
 # ---------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-LAMIX_API_URL = os.environ.get(
+# Main/Updated Panel-এর URL
+LAMIX_API_URL_1 = os.environ.get(
     "LAMIX_API_URL", "https://panel.lamix.org/api/v1/messages"
 )
-DEFAULT_TOKEN = "C57kIlfs-FfhslhXZnaJiM8TD8bNIQ65VtXt0ah3-Nk"
+DEFAULT_TOKEN_1 = "C57kIlfs-FfhslhXZnaJiM8TD8bNIQ65VtXt0ah3-Nk"
 
-LAMIX_TOKEN = os.environ.get("LAMIX_TOKEN", DEFAULT_TOKEN)
+# Backdated/Old Panel-এর URL (Railway Variable থেকে 'LAMIX_API_URL_2' যোগ করতে পারেন, না দিলে নিচে সরাসরি ব্যাকডেটেড IP কাজ করবে)
+LAMIX_API_URL_2 = os.environ.get(
+    "LAMIX_API_URL_2", "http://51.77.216.195/crap/api/lamix/viewstats"
+)
 
-ACCOUNTS = [
-    {"label": "Lamix", "token": os.environ.get("LAMIX_TOKEN", DEFAULT_TOKEN)},
-    {
-        "label": "Agent Panel",
-        "token": os.environ.get("LAMIX_TOKEN_2", DEFAULT_TOKEN),
-    },
-]
+ACCOUNTS = []
+
+# Main Panel (Account 1)
+token_1 = os.environ.get("LAMIX_TOKEN", DEFAULT_TOKEN_1)
+if token_1:
+    ACCOUNTS.append({
+        "label": "Lamix Main (New)", 
+        "token": token_1,
+        "url": LAMIX_API_URL_1
+    })
+
+# Backdated Panel (Account 2)
+token_2 = os.environ.get("LAMIX_TOKEN_2")
+if token_2:
+    ACCOUNTS.append({
+        "label": "Agent Panel (Old)", 
+        "token": token_2,
+        "url": LAMIX_API_URL_2
+    })
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "5"))
 SEEN_IDS_FILE = "seen_sms_ids.json"
 MAX_SEEN_IDS = 2000
 
-# বট স্টার্ট হওয়ার সঠিক সময় ধরে রাখার জন্য
-START_TIME = datetime.now()
-
-# ---------------------------------------------------------------------------
-# লগিং
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
 
+if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or not ACCOUNTS:
+    logger.error("প্রয়োজনীয় Environment Variables পাওয়া যায়নি!")
+    raise SystemExit(1)
 
-def check_env_vars():
-    missing = []
-    if not TELEGRAM_BOT_TOKEN:
-        missing.append("TELEGRAM_BOT_TOKEN")
-    if not TELEGRAM_CHAT_ID:
-        missing.append("TELEGRAM_CHAT_ID")
-    if not LAMIX_TOKEN:
-        missing.append("LAMIX_TOKEN")
-
-    active_accounts = [a for a in ACCOUNTS if a["token"]]
-    if not active_accounts:
-        missing.append("LAMIX_TOKEN (অন্তত একটা একাউন্ট টোকেন দরকার)")
-
-    if missing:
-        logger.error(
-            f"এই Environment Variable(গুলো) সেট করা নেই: {', '.join(missing)}"
-        )
-        logger.error(
-            "Railway Dashboard > Variables ট্যাব থেকে এগুলো যোগ করুন।"
-        )
-        raise SystemExit(1)
-
-
-check_env_vars()
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 
 # ---------------------------------------------------------------------------
-# seen_sms_ids ডিস্কে সেভ/লোড করার ফাংশন
+# Persistence Helpers
 # ---------------------------------------------------------------------------
 def load_seen_ids() -> set:
     if os.path.exists(SEEN_IDS_FILE):
         try:
             with open(SEEN_IDS_FILE, "r") as f:
-                data = json.load(f)
-                return set(data)
+                return set(json.load(f))
         except Exception as e:
             logger.error(f"seen_sms_ids লোড করতে সমস্যা: {e}")
     return set()
@@ -101,12 +88,20 @@ seen_sms_ids: set = load_seen_ids()
 
 
 # ---------------------------------------------------------------------------
-# API থেকে SMS আনার ফাংশন
+# API Fetch Function (Independent URL Support)
 # ---------------------------------------------------------------------------
-def get_latest_sms(token: str, label: str):
+async def fetch_sms_for_account(acc: dict) -> list:
+    label = acc["label"]
+    token = acc["token"]
+    api_url = acc["url"]
     params = {"token": token}
+    loop = asyncio.get_running_loop()
+
     try:
-        response = requests.get(LAMIX_API_URL, params=params, timeout=10)
+        # ৫ সেকেন্ডের টাইমআউট - ব্যাকডেটেড প্যানেল স্লো থাকলে যেন মেইন প্যানেল আটকে না যায়
+        response = await loop.run_in_executor(
+            None, lambda: requests.get(api_url, params=params, timeout=5)
+        )
         response.raise_for_status()
         data = response.json()
 
@@ -114,24 +109,65 @@ def get_latest_sms(token: str, label: str):
             return data["data"]
         elif isinstance(data, list):
             return data
+    except requests.exceptions.HTTPError as e:
+        # ৫০৩ সার্ভার এরর হলে এটি শুধু ওয়ার্নিং দেখাবে, পুরো বট থামবে না
+        logger.warning(f"[{label}] API Error/Unavailable: {e}")
     except requests.exceptions.RequestException as e:
-        logger.error(f"[{label}] API Fetch Error: {e}")
-    except ValueError as e:
-        logger.error(f"[{label}] API JSON Parse Error: {e}")
+        logger.warning(f"[{label}] Connection Timeout/Error: {e}")
+    except Exception as e:
+        logger.error(f"[{label}] Unexpected Error: {e}")
 
     return []
 
 
 def escape_markdown(text: str) -> str:
-    """Telegram MarkdownV2 স্পেশাল ক্যারেক্টার escape করা"""
     if not text:
-        return text
+        return ""
     special_chars = r"_*[]()~`>#+-=|{}.!"
     return "".join(f"\\{ch}" if ch in special_chars else ch for ch in str(text))
 
 
 # ---------------------------------------------------------------------------
-# মূল লুপ
+# SMS Processing Logic
+# ---------------------------------------------------------------------------
+async def process_account_sms(acc: dict):
+    label = acc["label"]
+    sms_list = await fetch_sms_for_account(acc)
+
+    for sms in reversed(sms_list):
+        number = sms.get("num", sms.get("number", "Unknown"))
+        message_text = sms.get("message", sms.get("text", ""))
+        date_str = sms.get("dt", sms.get("created_at", "N/A"))
+        service_client = sms.get("cli", sms.get("service", "N/A"))
+
+        sms_key = f"{label}_{number}_{message_text}_{date_str}"
+
+        if sms_key in seen_sms_ids:
+            continue
+
+        telegram_msg = (
+            f"🔔 *New SMS Received* \\({escape_markdown(label)}\\)\n\n"
+            f"📱 *Number:* `{escape_markdown(number)}`\n"
+            f"🏢 *Service:* {escape_markdown(service_client)}\n"
+            f"💬 *SMS:* {escape_markdown(message_text)}\n"
+            f"⏰ *Time:* {escape_markdown(date_str)}"
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=TELEGRAM_CHAT_ID,
+                text=telegram_msg,
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            seen_sms_ids.add(sms_key)
+            save_seen_ids(seen_sms_ids)
+            logger.info(f"নতুন SMS পাঠানো হয়েছে [{label}]: {sms_key}")
+        except TelegramError as e:
+            logger.error(f"Telegram Send Error [{label}]: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Main Loop
 # ---------------------------------------------------------------------------
 async def main():
     logger.info("Bot is LIVE & Checking for NEW SMS...")
@@ -140,20 +176,17 @@ async def main():
         bot_info = await bot.get_me()
         logger.info(f"Telegram Bot connected: @{bot_info.username}")
     except Exception as e:
-        logger.error(f"বট টোকেন যাচাই ব্যর্থ হয়েছে: {e}")
+        logger.error(f"বট টোকেন কাজ করছে না: {e}")
         return
 
-    active_accounts = [a for a in ACCOUNTS if a["token"]]
+    # পুরানো মেসেজ স্কিপিং
+    logger.info("পুরানো SMS চিহ্নিত (Skip) করা হচ্ছে...")
+    tasks = [fetch_sms_for_account(acc) for acc in ACCOUNTS]
+    results = await asyncio.gather(*tasks)
 
-    # -----------------------------------------------------------------------
-    # স্টার্টআপ চেক: পুরানো সব মেসেজ আগে Mark/Skip করে নেওয়া
-    # -----------------------------------------------------------------------
-    logger.info("পুরানো SMS এগুলো চিহ্নিত (skip) করা হচ্ছে...")
-    for acc in active_accounts:
-        label = acc["label"]
-        token = acc["token"]
-        existing_sms = get_latest_sms(token, label)
-        for sms in existing_sms:
+    for idx, sms_list in enumerate(results):
+        label = ACCOUNTS[idx]["label"]
+        for sms in sms_list:
             number = sms.get("num", sms.get("number", "Unknown"))
             message_text = sms.get("message", sms.get("text", ""))
             date_str = sms.get("dt", sms.get("created_at", "N/A"))
@@ -161,67 +194,16 @@ async def main():
             seen_sms_ids.add(sms_key)
 
     save_seen_ids(seen_sms_ids)
-    logger.info(
-        "পুরানো SMS স্কিপিং সম্পূর্ণ হয়েছে। এখন নতুন OTP/SMS-এর জন্য অপেক্ষা করা হচ্ছে..."
-    )
+    logger.info("পুরানো SMS স্কিপ সম্পন্ন। লাইভ মনিটরিং শুরু হচ্ছে...")
 
-    # -----------------------------------------------------------------------
-    # লাইভ লুপ
-    # -----------------------------------------------------------------------
+    # প্যারালাল লাইভ চেক
     while True:
         try:
-            for acc in active_accounts:
-                label = acc["label"]
-                token = acc["token"]
-                try:
-                    sms_list = get_latest_sms(token, label)
-
-                    for sms in reversed(sms_list):
-                        number = sms.get("num", sms.get("number", "Unknown"))
-                        message_text = sms.get(
-                            "message", sms.get("text", "")
-                        )
-                        date_str = sms.get("dt", sms.get("created_at", "N/A"))
-                        service_client = sms.get(
-                            "cli", sms.get("service", "N/A")
-                        )
-
-                        sms_key = f"{label}_{number}_{message_text}_{date_str}"
-
-                        # আগে থেকে প্রসেস করা হয়ে থাকলে স্কিপ করবে
-                        if sms_key in seen_sms_ids:
-                            continue
-
-                        telegram_msg = (
-                            f"🔔 *New SMS Received* \\({escape_markdown(label)}\\)\n\n"
-                            f"📱 *Number:* `{escape_markdown(number)}`\n"
-                            f"🏢 *Service:* {escape_markdown(service_client)}\n"
-                            f"💬 *SMS:* {escape_markdown(message_text)}\n"
-                            f"⏰ *Time:* {escape_markdown(date_str)}"
-                        )
-
-                        try:
-                            await bot.send_message(
-                                chat_id=TELEGRAM_CHAT_ID,
-                                text=telegram_msg,
-                                parse_mode=ParseMode.MARKDOWN_V2,
-                            )
-                            seen_sms_ids.add(sms_key)
-                            save_seen_ids(seen_sms_ids)
-                            logger.info(
-                                f"নতুন SMS পাঠানো হয়েছে [{label}]: {sms_key}"
-                            )
-
-                        except TelegramError as e:
-                            logger.error(
-                                f"Telegram Send Error ({sms_key}): {e}"
-                            )
-
-                except Exception as e:
-                    logger.error(f"[{label}] Loop Error: {e}")
-
+            await asyncio.gather(
+                *(process_account_sms(acc) for acc in ACCOUNTS)
+            )
         except Exception as e:
-            logger.error(f"Global Loop Error: {e}")
+            logger.error(f"Main Loop Error: {e}")
 
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
