@@ -16,10 +16,11 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 LAMIX_API_URL = os.environ.get(
     "LAMIX_API_URL", "https://panel.lamix.org/api/v1/messages"
 )
+
 DEFAULT_TOKEN = "C57kIlfs-FfhslhXZnaJiM8TD8bNIQ65VtXt0ah3-Nk"
 LAMIX_TOKEN = os.environ.get("LAMIX_TOKEN", DEFAULT_TOKEN)
 
-# API ব্লক এড়াতে ইন্টারভাল ১০ সেকেন্ড করা হলো
+# API Rate Limit (Max 40 req/min) বজায় রাখতে ১০ সেকেন্ড পারফেক্ট
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "10"))
 SEEN_IDS_FILE = "seen_sms_ids.json"
 MAX_SEEN_IDS = 2000
@@ -72,19 +73,26 @@ async def fetch_sms() -> list:
 
     try:
         response = await loop.run_in_executor(
-            None, lambda: requests.get(LAMIX_API_URL, params=params, timeout=5)
+            None, lambda: requests.get(LAMIX_API_URL, params=params, timeout=10)
         )
+
+        if response.status_code == 429:
+            logger.warning("[Lamix Panel] Rate Limit Exceeded (429)! Waiting 20s...")
+            await asyncio.sleep(20)
+            return []
+
         response.raise_for_status()
         data = response.json()
 
-        if isinstance(data, dict) and "data" in data:
-            return data["data"]
+        # Lamix REST API 'records' কী (key)-এর ভেতর ডেটা পাঠায়
+        if isinstance(data, dict) and "records" in data:
+            return data["records"]
         elif isinstance(data, list):
             return data
     except requests.exceptions.HTTPError as e:
-        logger.warning(f"[Lamix Panel] API Error/Unavailable: {e}")
+        logger.warning(f"[Lamix Panel] API Error: {e}")
     except requests.exceptions.RequestException as e:
-        logger.warning(f"[Lamix Panel] Connection Timeout/Error: {e}")
+        logger.warning(f"[Lamix Panel] Connection Error: {e}")
     except Exception as e:
         logger.error(f"[Lamix Panel] Unexpected Error: {e}")
 
@@ -105,10 +113,10 @@ async def process_sms():
     sms_list = await fetch_sms()
 
     for sms in reversed(sms_list):
-        number = sms.get("num", sms.get("number", "Unknown"))
-        message_text = sms.get("message", sms.get("text", ""))
-        date_str = sms.get("dt", sms.get("created_at", "N/A"))
-        service_client = sms.get("cli", sms.get("service", "N/A"))
+        number = sms.get("number", "Unknown")
+        message_text = sms.get("content", sms.get("message", ""))
+        date_str = sms.get("time", sms.get("created_at", "N/A"))
+        service_client = sms.get("cli", "N/A")
 
         sms_key = f"Lamix_{number}_{message_text}_{date_str}"
 
@@ -133,7 +141,7 @@ async def process_sms():
             save_seen_ids(seen_sms_ids)
             logger.info(f"নতুন SMS পাঠানো হয়েছে [Lamix Main]: {sms_key}")
         except TelegramError as e:
-            logger.error(f"Telegram Send Error [Lamix Main]: {e}")
+            logger.error(f"Telegram Send Error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +161,9 @@ async def main():
     logger.info("পুরানো SMS চিহ্নিত (Skip) করা হচ্ছে...")
     sms_list = await fetch_sms()
     for sms in sms_list:
-        number = sms.get("num", sms.get("number", "Unknown"))
-        message_text = sms.get("message", sms.get("text", ""))
-        date_str = sms.get("dt", sms.get("created_at", "N/A"))
+        number = sms.get("number", "Unknown")
+        message_text = sms.get("content", sms.get("message", ""))
+        date_str = sms.get("time", sms.get("created_at", "N/A"))
         sms_key = f"Lamix_{number}_{message_text}_{date_str}"
         seen_sms_ids.add(sms_key)
 
