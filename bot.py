@@ -67,15 +67,18 @@ seen_sms_ids: set = load_seen_ids()
 # API Fetch Function
 # ---------------------------------------------------------------------------
 async def fetch_sms() -> list:
-    params = {"token": LAMIX_TOKEN}
+    # URL এর সাথে সরাসরি token প্যারামিটার যোগ করা
+    url = f"{LAMIX_API_URL}?token={LAMIX_TOKEN}" if "?" not in LAMIX_API_URL else f"{LAMIX_API_URL}&token={LAMIX_TOKEN}"
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
     }
     loop = asyncio.get_running_loop()
 
     try:
         response = await loop.run_in_executor(
-            None, lambda: requests.get(LAMIX_API_URL, params=params, headers=headers, timeout=10)
+            None, lambda: requests.get(url, headers=headers, timeout=15)
         )
 
         if response.status_code == 429:
@@ -83,26 +86,30 @@ async def fetch_sms() -> list:
             await asyncio.sleep(20)
             return []
 
-        response.raise_for_status()
-
-        if not response.text.strip():
-            logger.warning("[Lamix Panel] Empty response received.")
+        # যদি কোনো কারণে 200 OK না আসে
+        if response.status_code != 200:
+            logger.warning(f"[Lamix Panel] API Status Code: {response.status_code} | Text: {response.text[:100]}")
             return []
 
+        # রেসপন্স খালি কিনা চেক
+        if not response.text or not response.text.strip():
+            logger.warning("[Lamix Panel] Received empty response from server.")
+            return []
+
+        # JSON পার্স করার চেষ্টা
         try:
             data = response.json()
-        except ValueError:
-            logger.warning(f"[Lamix Panel] Invalid Response: {response.text[:100]}")
+        except Exception:
+            logger.warning(f"[Lamix Panel] Non-JSON Response received: {response.text[:100]}")
             return []
 
         if isinstance(data, dict) and "records" in data:
             return data["records"]
         elif isinstance(data, list):
             return data
-    except requests.exceptions.HTTPError as e:
-        logger.warning(f"[Lamix Panel] API Error: {e}")
+
     except requests.exceptions.RequestException as e:
-        logger.warning(f"[Lamix Panel] Connection Error: {e}")
+        logger.warning(f"[Lamix Panel] Network/Connection Error: {e}")
     except Exception as e:
         logger.error(f"[Lamix Panel] Unexpected Error: {e}")
 
