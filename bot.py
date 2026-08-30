@@ -15,12 +15,11 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 LAMIX_API_URL = os.environ.get(
     "LAMIX_API_URL", "https://panel.lamix.org/api/v1/messages"
-)
+).strip()
 
 DEFAULT_TOKEN = "C57kIlfs-FfhslhXZnaJiM8TD8bNIQ65VtXt0ah3-Nk"
-LAMIX_TOKEN = os.environ.get("LAMIX_TOKEN", DEFAULT_TOKEN)
+LAMIX_TOKEN = os.environ.get("LAMIX_TOKEN", DEFAULT_TOKEN).strip()
 
-# API Rate Limit (Max 40 req/min) বজায় রাখতে ১০ সেকেন্ড পারফেক্ট
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "10"))
 SEEN_IDS_FILE = "seen_sms_ids.json"
 MAX_SEEN_IDS = 2000
@@ -69,22 +68,33 @@ seen_sms_ids: set = load_seen_ids()
 # ---------------------------------------------------------------------------
 async def fetch_sms() -> list:
     params = {"token": LAMIX_TOKEN}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
     loop = asyncio.get_running_loop()
 
     try:
         response = await loop.run_in_executor(
-            None, lambda: requests.get(LAMIX_API_URL, params=params, timeout=10)
+            None, lambda: requests.get(LAMIX_API_URL, params=params, headers=headers, timeout=10)
         )
 
         if response.status_code == 429:
-            logger.warning("[Lamix Panel] Rate Limit Exceeded (429)! Waiting 20s...")
+            logger.warning("[Lamix Panel] Rate Limit (429)! Waiting 20s...")
             await asyncio.sleep(20)
             return []
 
         response.raise_for_status()
-        data = response.json()
 
-        # Lamix REST API 'records' কী (key)-এর ভেতর ডেটা পাঠায়
+        if not response.text.strip():
+            logger.warning("[Lamix Panel] Empty response received.")
+            return []
+
+        try:
+            data = response.json()
+        except ValueError:
+            logger.warning(f"[Lamix Panel] Invalid Response: {response.text[:100]}")
+            return []
+
         if isinstance(data, dict) and "records" in data:
             return data["records"]
         elif isinstance(data, list):
