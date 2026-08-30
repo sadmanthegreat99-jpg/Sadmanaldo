@@ -19,7 +19,8 @@ LAMIX_API_URL = os.environ.get(
 DEFAULT_TOKEN = "C57kIlfs-FfhslhXZnaJiM8TD8bNIQ65VtXt0ah3-Nk"
 LAMIX_TOKEN = os.environ.get("LAMIX_TOKEN", DEFAULT_TOKEN)
 
-POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "5"))
+# API ব্লক এড়াতে ইন্টারভাল ১০ সেকেন্ড করা হলো
+POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "10"))
 SEEN_IDS_FILE = "seen_sms_ids.json"
 MAX_SEEN_IDS = 2000
 
